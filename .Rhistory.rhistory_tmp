@@ -1,0 +1,512 @@
+Cancer.type <- read.csv('cancer type')
+colnames(Cancer.type) <- c("ID","cancer type")
+###Cancer.type <- Cancer.type[grep("C34", Cancer.type$`cancer type`), ]
+lungcancer <- inner_join(lungcancer, Cancer.type, by = "ID")
+lungcancer <- lungcancer %>% filter(!is.na(Histology.cancer))
+lungcancer <- lungcancer %>%
+mutate(
+# 提取编码前缀
+icd_prefix = substr(`cancer type`, 1, 3),
+# 创建新列
+cancer_type_group = case_when(
+icd_prefix %in% c("C00", "C01", "C02", "C03", "C04", "C05", "C06",
+"C07", "C08", "C09", "C10", "C11", "C12", "C13", "C14") ~ "Oral Cavity and Pharyngeal Cancer",
+icd_prefix == "C15" ~ "Esophageal Cancer",
+icd_prefix == "C16" ~ "Stomach Cancer",
+icd_prefix %in% c("C17", "C18", "C19", "C20", "C21") ~ "Colorectal Cancer",
+icd_prefix %in% c("C22", "C23", "C24") ~ "Liver and Biliary Tract Cancer",
+icd_prefix == "C25" ~ "Pancreatic Cancer",
+icd_prefix == "C34" ~ "Lung Cancer",
+icd_prefix == "C32" ~ "Laryngeal Cancer",
+icd_prefix == "C11" ~ "Nasopharyngeal Cancer",
+icd_prefix %in% c("C43", "C44") ~ "Skin Cancer",
+icd_prefix == "C50" ~ "Breast Cancer",
+icd_prefix == "C53" ~ "Cervical Cancer",
+icd_prefix == "C56" ~ "Ovarian Cancer",
+icd_prefix == "C54" ~ "Endometrial Cancer",
+icd_prefix == "C61" ~ "Prostate Cancer",
+icd_prefix == "C64" ~ "Kidney Cancer",
+icd_prefix == "C67" ~ "Bladder Cancer",
+icd_prefix == "C73" ~ "Thyroid Cancer",
+icd_prefix == "C71" ~ "Brain Cancer",
+TRUE ~ "Other/Unspecified"
+)
+) %>%
+select(-icd_prefix)  # 移除临时列
+table(lungcancer$cancer_type_group, useNA = "always")
+lungcancer <- lungcancer %>%
+mutate(Censoring.date = case_when(
+Region %in% c("England", "Wales") ~ as.Date("2024-08-31"),
+Region == "Scotland" ~ as.Date("2024-11-30"),
+TRUE ~ as.Date(NA)  # 其他情况设为NA
+))
+basic.time <- read.csv('basic time')
+names(basic.time)[names(basic.time) == "Participant.ID"] <- "ID"
+colnames(basic.time)[2] <-"basic.time"
+Testosterone <- read.csv('Testosterone')
+names(Testosterone)[names(Testosterone) == "Participant.ID"] <- "ID"
+colnames(Testosterone)[2] <-c("Testosterone")
+colnames(Testosterone)[3] <-c("Estradiol")
+library(dplyr)
+# 使用inner_join只保留共有ID
+lungcancer <- inner_join(lungcancer, basic.time, by = "ID")
+lungcancer <- inner_join(lungcancer, Testosterone, by = "ID")
+lungcancer <- lungcancer %>%
+mutate(
+Testosterone.level = ifelse(
+Testosterone<12,
+"low level",
+ifelse(
+Testosterone>35.4,
+"high level",
+"normal level"
+)))
+lungcancer <- lungcancer %>%
+mutate(
+# 直接转换为日期格式，空白会自动转为NA
+Death.date = as.Date(Death.date),
+Diagnosis.date = as.Date(Diagnosis.date),
+Lost.to.follow.up = as.Date(Lost.to.follow.up),
+Censoring.date = as.Date(Censoring.date),
+basic.time = as.Date(basic.time)
+)
+lungcancer <- lungcancer %>%
+mutate(
+# 计算OS（总生存期）和Status
+OS = ifelse(
+!is.na(Death.date),  # Death.date不为空白
+as.numeric(Death.date - basic.time),  # 死亡日期 - 诊断日期
+ifelse(
+!is.na(Lost.to.follow.up),  # Lost.to.follow.up不为空白
+as.numeric(Lost.to.follow.up - basic.time),  # 失访日期 - 诊断日期
+as.numeric(Censoring.date - basic.time)  # 截止日期 - 诊断日期
+)
+),
+# Status列：Death.date不为空白则为1，否则为0
+Status = ifelse(!is.na(Death.date), 1, 0)
+)
+lungcancer <- lungcancer %>%
+mutate(
+# 保持原始OS（天）
+OS_days = OS,
+# 转换为月
+OS_months = OS_days / 30.44,
+# 转换为年
+OS_years = OS_days / 365.25,
+# 四舍五入到两位小数
+OS_months_rounded = round(OS_months, 2),
+OS_years_rounded = round(OS_years, 2)
+)
+lungcancer <- lungcancer %>%
+select(-c(OS, OS_days,OS_months,OS_years,OS_months_rounded))
+names(lungcancer)[names(lungcancer) == "OS_years_rounded"] <- "OS"
+cols_to_check1 <- c("First.facial.hair", "Voice.broke")
+# 删除指定三列中任意一列为空字符串或NA的行
+lungcancer_man <- lungcancer %>%
+filter(
+if_all(all_of(cols_to_check1), ~ !is.na(.) & trimws(as.character(.)) != "")
+)
+lungcancer_man <- lungcancer_man[!(lungcancer_man$First.facial.hair %in% c("Do not know", "Prefer not to answer") | lungcancer_man$Voice.broke %in% c("Do not know", "Prefer not to answer")), ]
+lungcancer_man$First.facial.hair2 <- paste0("facial hair",lungcancer_man$First.facial.hair)
+lungcancer_man$Voice.broke2 <- paste0("voice broke",lungcancer_man$Voice.broke)
+lungcancer_man$male.characteristics <- paste0(lungcancer_man$First.facial.hair2,lungcancer_man$Voice.broke2)
+lungcancer_man <- lungcancer_man %>%
+mutate(
+male.characteristics2 = ifelse(
+male.characteristics=="facial hairAbout average agevoice brokeOlder than average",
+"hair average+voice older",
+ifelse(
+male.characteristics=="facial hairAbout average agevoice brokeYounger than average",
+"hair average+voice younger",
+ifelse(male.characteristics=="facial hairOlder than averagevoice brokeAbout average age","hair older+voice average",ifelse(male.characteristics=="facial hairOlder than averagevoice brokeOlder than average","hair older+voice older",ifelse(male.characteristics=="facial hairOlder than averagevoice brokeYounger than average","hair older+voice younger",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeAbout average age","hair younger+voice average",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeOlder than average","hair younger+voice older",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeYounger than average","hair younger+voice younger","hair average+voice average"))))))
+)))
+###lungcancer_man$Townsend.deprivation <- ifelse(lungcancer_man$Townsend.deprivation<=-3.49,"Quintile1",ifelse(lungcancer_man$Townsend.deprivation>-3.49&lungcancer_man$Townsend.deprivation<=-0.49,"Quintile2",ifelse(lungcancer_man$Townsend.deprivation>-0.49&lungcancer_man$Townsend.deprivation<=3.49,"Quintile3",ifelse(lungcancer_man$Townsend.deprivation>3.49&lungcancer_man$Townsend.deprivation<=7.49,"Quintile4","Quintile5"))))
+library(survival)      # Cox回归分析
+library(survminer)     # 生存分析可视化
+library(tidyverse)     # 数据处理
+library(broom)         # 模型结果整理
+library(forestplot)
+View(lungcancer_man)
+table（lungcancer_man$Smoking）
+table(lungcancer_man$Smoking)
+table(lungcancer_man$Alcohol)
+###lung_cancer
+lung_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Lung Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ lung_cancer$First.facial.hair, data = lung_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ lung_cancer$Voice.broke, data = lung_cancer)
+summary(cox_voice)
+fit1<- survfit(Surv(OS, Status) ~ First.facial.hair, data = lung_cancer)
+ggsurvplot(
+fit1,
+pval = TRUE,
+risk.table = TRUE,
+palette = "jco",
+censor.size=2.5,
+xlab = "Years",
+ylab="OS(probability)",
+legend.labs = c("About average age","Older than average", "Younger than average"),
+legend.title = " ",
+title = "First facial hair",
+surv.median.line = "hv",  # 加上中位生存线
+legend = c(0.8, 0.9),# 图例移到右上角
+)
+fit2<- survfit(Surv(OS, Status) ~ Voice.broke, data = lung_cancer)
+ggsurvplot(
+fit2,
+pval = TRUE,
+risk.table = TRUE,
+palette = "jco",
+censor.size=2.5,
+xlab = "Years",
+ylab="OS(probability)",
+legend.labs = c("About average age","Older than average", "Younger than average"),
+legend.title = " ",
+title = "Voice broke",
+surv.median.line = "hv",  # 加上中位生存线
+legend = c(0.8, 0.9),# 图例移到右上角
+)
+###esophageal_cancer
+esophageal_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Esophageal Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ esophageal_cancer$First.facial.hair, data = esophageal_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ esophageal_cancer$Voice.broke, data = esophageal_cancer)
+summary(cox_voice)
+fit1<- survfit(Surv(OS, Status) ~ First.facial.hair, data = esophageal_cancer)
+ggsurvplot(
+fit1,
+pval = TRUE,
+risk.table = TRUE,
+palette = "jco",
+censor.size=2.5,
+xlab = "Years",
+ylab="OS(probability)",
+legend.labs = c("About average age","Older than average", "Younger than average"),
+legend.title = " ",
+title = "First facial hair",
+surv.median.line = "hv",  # 加上中位生存线
+legend = c(0.8, 0.9),# 图例移到右上角
+)
+###esophageal_cancer
+esophageal_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Esophageal Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ esophageal_cancer$First.facial.hair, data = esophageal_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ esophageal_cancer$Voice.broke, data = esophageal_cancer)
+summary(cox_voice)
+###Prostate_cancer
+Prostate_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Prostate Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ Prostate_cancer$First.facial.hair, data = Prostate_cancer)
+###Colorectal_cancer
+Colorectal_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Colorectal Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ Colorectal_cancer$First.facial.hair, data = Colorectal_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ Colorectal_cancer$Voice.broke, data = Colorectal_cancer)
+summary(cox_voice)
+###Oral Cavity and Pharyngeal_cancer
+Oral_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Oral Cavity and Pharyngeal Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ Oral_cancer$First.facial.hair, data = Oral_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ Oral_cancer$Voice.broke, data = Oral_cancer)
+summary(cox_voice)
+###Skin_cancer
+Skin_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Skin Cancer")
+cox_facial <- coxph(Surv(OS, Status) ~ Skin_cancer$First.facial.hair, data = Skin_cancer)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ Skin_cancer$Voice.broke, data = Skin_cancer)
+summary(cox_voice)
+cox_facial <- coxph(Surv(OS, Status) ~ lungcancer_man$First.facial.hair, data = lungcancer_man)
+summary(cox_facial)
+cox_voice <- coxph(Surv(OS, Status) ~ lungcancer_man$Voice.broke, data = lungcancer_man)
+summary(cox_voice)
+fit1<- survfit(Surv(OS, Status) ~ First.facial.hair, data = lungcancer_man)
+p<- ggsurvplot(
+fit1,
+pval = TRUE,
+risk.table = TRUE,
+palette = "jco",
+censor.size=2.5,
+xlab = "Years",
+ylab="OS(probability)",
+legend.labs = c("About average age","Older than average", "Younger than average"),
+legend.title = " ",
+title = "First facial hair",
+surv.median.line = "hv",  # 加上中位生存线
+legend = c(0.8, 0.9),# 图例移到右上角
+)
+library(ggplot2)
+p$plot <- p$plot +
+coord_cartesian(ylim = c(0.4, 1.0)) +
+scale_y_continuous(breaks = seq(0.4, 1.0, 0.1))
+p
+lungcancer_man$Ethnic
+table(lungcancer_man$Ethnic)
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic==c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic==c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic==c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others"))
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic==c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic==c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic==c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others")))
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic==c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic==c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic==c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others")))
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic==c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic==c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic==c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others")))
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic%in%c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic%in%c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic%in%c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others")))
+table(lungcancer_man$Ethnic)
+lungcancer <- read.csv('data_participant.csv')
+colnames(lungcancer) <- c('ID','Sex','Last.contact.with.UKB','Lost.to.follow.up','Smoking','Amount.of.smoking','Diagnosis.date','Diagnosis.age','Histology','Death.date','Deprivation.index','Townsend.deprivation','Household.number','Household.income','Length.of.working.week','Heavy.job','Night.job','Ethnic','Moderate.activity','Strenuous.sport','Mobile.phone.use','Sleep','Getting.up','Nap','Dried.fruit','Fresh.fruit','Salt.add','Coffee','Alcohol','Alcohol.frequency','Outdoors.summer','Outdoors.winter','Outdoors.winter2','Breastfed','Able.to.confide','Irritability','Miserableness','Sensitivity','Nervous','Happiness','First.facial.hair','Voice.broke','Balding','Menarche','Menopause','Menopause.age','Assessment.centre')
+lungcancer$Region <- ifelse(lungcancer$`Assessment.centre` %in% c("Edinburgh", "Glasgow"), "Scotland",
+ifelse(lungcancer$`Assessment.centre` %in% c("Cardiff", "Swansea", "Wrexham"), "Wales", "England"))
+library(dplyr)
+lungcancer <- lungcancer %>%
+mutate(Histology.cancer = case_when(
+# Squamous
+Histology %in% c(8052, 8070, 8071, 8072, 8073, 8074, 8083, 8084) ~ "Squamous",
+# Adenocarcinomas
+Histology %in% c(8140, 8250, 8251, 8252, 8253, 8254, 8255, 8260,
++                          8323, 8480, 8481, 8490, 8550, 8570, 8571, 8572, 8574) ~ "Adenocarcinomas",
+# 注意：从Adenocarcinomas中移除了8310，因为它同时出现在Large cell组中
+# Large cell
+Histology %in% c(8012, 8013, 8032, 8310) ~ "Large cell",
+# Neuroendocrine
+Histology %in% c(8041, 8042, 8043, 8044, 8045, 8240, 8246, 8249) ~ "Neuroendocrine",
+# Unspecified
+Histology %in% c(8020, 8021, 8022, 8030, 8031, 8033, 8034, 8035, 8046, 8560) ~ "Unspecified",
+# Salivary gland type
+Histology %in% c(8200, 8430, 8980) ~ "Salivary gland type",
+# 不在以上任何一组的值设为NA
+TRUE ~ NA_character_
+))
+Cancer.type <- read.csv('cancer type')
+colnames(Cancer.type) <- c("ID","cancer type")
+###Cancer.type <- Cancer.type[grep("C34", Cancer.type$`cancer type`), ]
+lungcancer <- inner_join(lungcancer, Cancer.type, by = "ID")
+lungcancer <- lungcancer %>% filter(!is.na(Histology.cancer))
+lungcancer <- lungcancer %>%
+mutate(
+# 提取编码前缀
+icd_prefix = substr(`cancer type`, 1, 3),
+# 创建新列
+cancer_type_group = case_when(
+icd_prefix %in% c("C00", "C01", "C02", "C03", "C04", "C05", "C06",
+"C07", "C08", "C09", "C10", "C11", "C12", "C13", "C14") ~ "Oral Cavity and Pharyngeal Cancer",
+icd_prefix == "C15" ~ "Esophageal Cancer",
+icd_prefix == "C16" ~ "Stomach Cancer",
+icd_prefix %in% c("C17", "C18", "C19", "C20", "C21") ~ "Colorectal Cancer",
+icd_prefix %in% c("C22", "C23", "C24") ~ "Liver and Biliary Tract Cancer",
+icd_prefix == "C25" ~ "Pancreatic Cancer",
+icd_prefix == "C34" ~ "Lung Cancer",
+icd_prefix == "C32" ~ "Laryngeal Cancer",
+icd_prefix == "C11" ~ "Nasopharyngeal Cancer",
+icd_prefix %in% c("C43", "C44") ~ "Skin Cancer",
+icd_prefix == "C50" ~ "Breast Cancer",
+icd_prefix == "C53" ~ "Cervical Cancer",
+icd_prefix == "C56" ~ "Ovarian Cancer",
+icd_prefix == "C54" ~ "Endometrial Cancer",
+icd_prefix == "C61" ~ "Prostate Cancer",
+icd_prefix == "C64" ~ "Kidney Cancer",
+icd_prefix == "C67" ~ "Bladder Cancer",
+icd_prefix == "C73" ~ "Thyroid Cancer",
+icd_prefix == "C71" ~ "Brain Cancer",
+TRUE ~ "Other/Unspecified"
+)
+) %>%
+select(-icd_prefix)  # 移除临时列
+lungcancer <- lungcancer %>%
+mutate(Censoring.date = case_when(
+Region %in% c("England", "Wales") ~ as.Date("2024-08-31"),
+Region == "Scotland" ~ as.Date("2024-11-30"),
+TRUE ~ as.Date(NA)  # 其他情况设为NA
+))
+basic.time <- read.csv('basic time')
+names(basic.time)[names(basic.time) == "Participant.ID"] <- "ID"
+colnames(basic.time)[2] <-"basic.time"
+Testosterone <- read.csv('Testosterone')
+names(Testosterone)[names(Testosterone) == "Participant.ID"] <- "ID"
+colnames(Testosterone)[2] <-c("Testosterone")
+colnames(Testosterone)[3] <-c("Estradiol")
+library(dplyr)
+# 使用inner_join只保留共有ID
+lungcancer <- inner_join(lungcancer, basic.time, by = "ID")
+lungcancer <- inner_join(lungcancer, Testosterone, by = "ID")
+lungcancer <- lungcancer %>%
+mutate(
+Testosterone.level = ifelse(
+Testosterone<12,
+"low level",
+ifelse(
+Testosterone>35.4,
+"high level",
+"normal level"
+)))
+lungcancer <- lungcancer %>%
+mutate(
+# 直接转换为日期格式，空白会自动转为NA
+Death.date = as.Date(Death.date),
+Diagnosis.date = as.Date(Diagnosis.date),
+Lost.to.follow.up = as.Date(Lost.to.follow.up),
+Censoring.date = as.Date(Censoring.date),
+basic.time = as.Date(basic.time)
+)
+lungcancer <- lungcancer %>%
+mutate(
+# 计算OS（总生存期）和Status
+OS = ifelse(
+!is.na(Death.date),  # Death.date不为空白
+as.numeric(Death.date - basic.time),  # 死亡日期 - 诊断日期
+ifelse(
+!is.na(Lost.to.follow.up),  # Lost.to.follow.up不为空白
+as.numeric(Lost.to.follow.up - basic.time),  # 失访日期 - 诊断日期
+as.numeric(Censoring.date - basic.time)  # 截止日期 - 诊断日期
+)
+),
+# Status列：Death.date不为空白则为1，否则为0
+Status = ifelse(!is.na(Death.date), 1, 0)
+)
+lungcancer <- lungcancer %>%
+mutate(
+# 保持原始OS（天）
+OS_days = OS,
+# 转换为月
+OS_months = OS_days / 30.44,
+# 转换为年
+OS_years = OS_days / 365.25,
+# 四舍五入到两位小数
+OS_months_rounded = round(OS_months, 2),
+OS_years_rounded = round(OS_years, 2)
+)
+lungcancer <- lungcancer %>%
+select(-c(OS, OS_days,OS_months,OS_years,OS_months_rounded))
+names(lungcancer)[names(lungcancer) == "OS_years_rounded"] <- "OS"
+cols_to_check1 <- c("First.facial.hair", "Voice.broke")
+# 删除指定三列中任意一列为空字符串或NA的行
+lungcancer_man <- lungcancer %>%
+filter(
+if_all(all_of(cols_to_check1), ~ !is.na(.) & trimws(as.character(.)) != "")
+)
+lungcancer_man <- lungcancer_man[!(lungcancer_man$First.facial.hair %in% c("Do not know", "Prefer not to answer") | lungcancer_man$Voice.broke %in% c("Do not know", "Prefer not to answer")), ]
+lungcancer_man$First.facial.hair2 <- paste0("facial hair",lungcancer_man$First.facial.hair)
+lungcancer_man$Voice.broke2 <- paste0("voice broke",lungcancer_man$Voice.broke)
+lungcancer_man$male.characteristics <- paste0(lungcancer_man$First.facial.hair2,lungcancer_man$Voice.broke2)
+lungcancer_man <- lungcancer_man %>%
+mutate(
+male.characteristics2 = ifelse(
+male.characteristics=="facial hairAbout average agevoice brokeOlder than average",
+"hair average+voice older",
+ifelse(
+male.characteristics=="facial hairAbout average agevoice brokeYounger than average",
+"hair average+voice younger",
+ifelse(male.characteristics=="facial hairOlder than averagevoice brokeAbout average age","hair older+voice average",ifelse(male.characteristics=="facial hairOlder than averagevoice brokeOlder than average","hair older+voice older",ifelse(male.characteristics=="facial hairOlder than averagevoice brokeYounger than average","hair older+voice younger",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeAbout average age","hair younger+voice average",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeOlder than average","hair younger+voice older",ifelse(male.characteristics=="facial hairYounger than averagevoice brokeYounger than average","hair younger+voice younger","hair average+voice average"))))))
+)))
+###lungcancer_man$Townsend.deprivation <- ifelse(lungcancer_man$Townsend.deprivation<=-3.49,"Quintile1",ifelse(lungcancer_man$Townsend.deprivation>-3.49&lungcancer_man$Townsend.deprivation<=-0.49,"Quintile2",ifelse(lungcancer_man$Townsend.deprivation>-0.49&lungcancer_man$Townsend.deprivation<=3.49,"Quintile3",ifelse(lungcancer_man$Townsend.deprivation>3.49&lungcancer_man$Townsend.deprivation<=7.49,"Quintile4","Quintile5"))))
+library(survival)      # Cox回归分析
+library(survminer)     # 生存分析可视化
+library(tidyverse)     # 数据处理
+library(broom)         # 模型结果整理
+library(forestplot)
+###lung_cancer
+lung_cancer <- filter(lungcancer_man,lungcancer_man$cancer_type_group=="Lung Cancer")
+###multi cox
+lungcancer_man$Ethnic <- ifelse(lungcancer_man$Ethnic%in%c("White","British","Irish","Any other white background","White and Asian","White and Black African","White and Black Caribbean"),"White",ifelse(lungcancer_man$Ethnic%in%c("Any other Black background","African","Black or Black British","Caribbean"),"Black",ifelse(lungcancer_man$Ethnic%in%c("Any other Asian background","Bangladeshi","Chinese","Indian","Pakistani"),"Asian","Others")))
+table(lungcancer_man$Ethnic)
+lungcancer_man$Alcohol <- ifelse(lungcancer_man$Alcohol=="Current","Current",ifelse(lungcancer_man$Alcohol=="Never","Never",ifelse(lungcancer_man$Alcohol=="Previous","Previous","Others")))
+table(lungcancer_man$Smoking)
+table(lungcancer_man$Alcohol)
+lungcancer_man$Breastfed <- ifelse(lungcancer_man$Breastfed=="Yes","Yes",ifelse(lungcancer_man$Breastfed=="No","No","Others"))
+#lungcancer_man$Histology.cancer <- ifelse(lung_cancer$Histology.cancer=="Adenocarcinomas","Adenocarcinomas",ifelse(lung_cancer$Histology.cancer=="Squamous","Squamous","Others"))
+cox_model <- coxph(Surv(OS, Status) ~ Diagnosis.age + Townsend.deprivation +
+Household.income + Ethnic + Alcohol + Breastfed +
+male.characteristics2,
+data = lungcancer_man)
+model_summary <- summary(cox_model)
+summary(cox_model)
+results <- data.frame(
+Variable = rownames(model_summary$coefficients),
+HR = model_summary$coefficients[, "exp(coef)"],
+CI_lower = model_summary$conf.int[, "lower .95"],
+CI_upper = model_summary$conf.int[, "upper .95"],
+p_value = model_summary$coefficients[, "Pr(>|z|)"]
+)
+# 4. 筛选显著变量 (p < 0.05)
+significant_results <- results %>%
+filter(p_value < 0.05) %>%
+arrange(p_value)  # 按p值排序
+View(significant_results)
+table(lungcancer_man$Household.income)
+significant_results <- significant_results[c(6,1,2,7,13,12,10,11),]
+###准备数据
+tabletext <- cbind(
+c("Variable", as.character(significant_results$Variable)),
+c("HR (95% CI)", sprintf("%.2f (%.2f-%.2f)",
+significant_results$HR,
+significant_results$CI_lower,
+significant_results$CI_upper)),
+c("P Value", sprintf("%.3f", significant_results$p_value))
+)
+# 准备森林图的估计值和置信区间
+mean <- c(NA, significant_results$HR)
+lower <- c(NA, significant_results$CI_lower)
+upper <- c(NA, significant_results$CI_upper)
+forestplot(labeltext = tabletext,
+mean = mean,
+clip=c(0,3),
+lower = lower,
+upper = upper,
+lineheight = unit(1, "cm"),
+colgap = unit(0.5, "cm"),
+xlab = "Hazard Ratio",
+xticks = c(0, 1, 2 ),
+graph.pos = 2,  # 森林图在第二列
+zero = 1,  # 参考线在HR=1处
+boxsize = 0.15,
+col = fpColors(box = "blue", line = "blue"),
+txt_gp = fpTxtGp(cex = 0.9),
+hrzl_lines = list("2" = gpar(lty = 2)),
+title = "Multivariable Cox Regression Analysis\n(Significant Variables Only, P < 0.05)")
+###table1
+library(tableone)
+###table1
+library(tableone)
+table(lungcancer_man$Smoking)
+lungcancer_man$Smoking <- ifelse(lungcancer_man$Smoking=="Ex-smoker","Previous",ifelse(lungcancer_man$Smoking=="Never smoked","Never",ifelse(lungcancer_man%in%c("Occasionally","Smokes on most or all days"),"Current","Others")))
+table(lungcancer_man$Smoking)
+my_vars <- c("Diagnosis.age","Townsend.deprivation",
+"Ethnic","Alcohol","Breastfed",
+"First.facial.hair","Voice.broke")
+cat_vars <- c("Ethnic","Alcohol","Breastfed","First.facial.hair","Voice.broke")
+# 创建TableOne对象
+tab1 <- CreateTableOne(vars = my_vars,
+strata = "First.facial.hair",
+data = lung_cancer,
+factorVars = cat_vars)
+my_vars <- c("Diagnosis.age","Townsend.deprivation",
+"Ethnic","Alcohol","Breastfed",
+"First.facial.hair","Voice.broke")
+cat_vars <- c("Ethnic","Alcohol","Breastfed","First.facial.hair","Voice.broke")
+# 创建TableOne对象
+tab1 <- CreateTableOne(vars = my_vars,
+strata = "First.facial.hair",
+data = lungcancer_man,
+factorVars = cat_vars)
+tab1 <- print(tab1,
+showAllLevels = TRUE,
+addOverall = TRUE,
+quote = FALSE,
+noSpaces = TRUE,
+printToggle = FALSE)
+View(tab1)
+my_vars <- c("Diagnosis.age","Townsend.deprivation",
+"Ethnic","Alcohol","Breastfed","First.facial.hair","Voice.broke")
+# 创建TableOne对象
+tab2 <- CreateTableOne(vars = my_vars,
+strata = "Voice.broke",
+data = lungcancer_man,
+factorVars = cat_vars)
+tab2 <- print(tab2,
+showAllLevels = TRUE,
+addOverall = TRUE,
+quote = FALSE,
+noSpaces = TRUE,
+printToggle = FALSE)
+table1 <- cbind(tab1,tab2)
+library(writexl)
+table1 <- as.data.frame(table1)
+write_xlsx(table1, path = "D:/外用/Documents/pan-cancer/table1(2)")
